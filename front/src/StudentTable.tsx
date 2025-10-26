@@ -288,7 +288,7 @@ export function StudentTable({ data }: { data: Student[] }) {
           </button>
         </div>
         <div className="flex space-x-2">
-          <button
+          {/* <button
             onClick={() => table.resetColumnVisibility()}
             className="px-3 py-1 text-sm rounded-md border cursor-pointer border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
           >
@@ -301,7 +301,7 @@ export function StudentTable({ data }: { data: Student[] }) {
             {table.getColumn("name")?.getIsVisible()
               ? "Hide Name"
               : "Show Name"}
-          </button>
+          </button> */}
           <button
             onClick={() =>
               downloadCSV(
