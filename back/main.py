@@ -7,21 +7,28 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
-
+import uuid
 import usb.core
 import usb.util
 import nfc
 from ndef import TextRecord, UriRecord
-from sqlmodel import SQLModel, Field, create_engine
-
+from sqlmodel import SQLModel, Session, Field, create_engine, select
+from pydantic import BaseModel
 # --- your SQLModel (unchanged) ---
 class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
+    tid: str
+    name: str   
+    lastscan: int
+    in_school: bool
+class newUser(BaseModel):
+    id: int | None = Field(default=None, primary_key=True)
+    tid: str
     name: str
     lastscan: int
-
-DATABASE_URL = ("postgresql+asyncpg://username:password@localhost:5432/nfctag")
-
+    in_school: bool
+engine = create_engine("postgresql://username:password@localhost:5432/nfctag")
+SQLModel.metadata.create_all(engine)
 # Globals
 _clf: Optional[nfc.ContactlessFrontend] = None
 _scan_thread: Optional[threading.Thread] = None
@@ -39,6 +46,7 @@ import usb.core
 import usb.util
 
 device = None
+LASTUUID="example"
 LASTID = "example"
 ACR122_VID = 0x072F
 ACR122_PID = 0x2200
@@ -97,13 +105,11 @@ def reset_acr122(timeout: float = 0.6) -> bool:
                 pass
             dev.reset()
             time.sleep(timeout)
-            print("pyusb: USB device reset successfully.")
             return True
         except Exception as e:
-            print("pyusb: USB reset failed:", repr(e))
+            print("pyusb: USB rese failed:", repr(e))
 
     return False
-
 
 def format_tag_id(tag):
     try:
@@ -117,7 +123,7 @@ def format_tag_id(tag):
 
 def handle_tag(tag):
     # Called when a tag is connected. Checks TextRecord content and prints it.
-    global LASTID, device
+    global LASTID, device, LASTUUID
     tid = format_tag_id(tag)
     print(f"Tag detected: id={tid}")
     try:
@@ -129,22 +135,24 @@ def handle_tag(tag):
                         found_textrecord = True
                         text_content = record.text
                         print(text_content)
+                        
                 if not found_textrecord:
                     print("No TextRecord found on tag")
             else:
                 print("Tag has no NDEF records")
-        else:
-            print("this shit is not NDEF compatible!!!")
         if LASTID != tid:
-            if device:
-                try:
-                    device.turn_on_led_and_buzzer()
-                except Exception as e:
-                    print("LED/buzzer activation failed:", repr(e))
+            # if device: #This shit doesn't work at the moment because of AssertionError and shit.
+            #     try:
+            #         device.turn_on_led_and_buzzer()
+            #     except Exception as e:
+            #         print("LED/buzzer activation failed:", repr(e))
             LASTID = tid
+            # Create a session here too
+            with Session(engine) as session:
+                statement = select(User).where(User.tid == text_content)
+                first = session.exec(statement).first()
+                print(first)
             print("new")
-        else:
-            print("not new")
     except Exception as e:
         print("Error reading NDEF:", repr(e))
 
@@ -326,24 +334,39 @@ async def write_item(string: str):
         raise HTTPException(status_code=504, detail=result.get("reason", "write failed"))
     return result
 
-@app.get("/write/{string}")
-async def write_item(string: str):
+@app.post("/newTag")
+async def write_item(newTag: User):
     global _clf
     if _clf is None:
         raise HTTPException(status_code=503, detail="NFC reader not available")
     def write_connect():
         written = False
         message = None
-
         def on_connect(tag):
             nonlocal written, message
             try:
                 if getattr(tag, "ndef", None):
-                    record = TextRecord(string)
-                    tag.ndef.records = [record]
-                    written = True
-                    message = f"Tag written with TextRecord: {string}"
-                    print(message)
+                    if tag.ndef:
+                        for record in tag.ndef.records:
+                            if isinstance(record, TextRecord):
+                                text_content = record.text
+                                with Session(engine) as session:
+                                    statement = select(User).where(User.tid == text_content)
+                                    hero = session.exec(statement).first()
+                                    if hero == None:
+                                        newUuid = uuid.uuid4()
+                                        record = TextRecord(str(newUuid))
+                                        tag.ndef.records = [record]
+                                        newTag.tid = newUuid
+                                        t = time.time()
+                                        newTag.lastscan = int(t)
+                                        answer = session.add(newTag)
+                                        session.commit()
+                                        written = True
+                                        print(f"added {answer}")
+                                            
+                    else:
+                        print("Tag has no NDEF records")
                 else:
                     message = "Tag is not NDEF-compatible"
                     print(message)
