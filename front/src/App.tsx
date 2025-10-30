@@ -1,12 +1,25 @@
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  Navigate,
+} from "react-router-dom";
 import { StudentTable } from "./StudentTable";
-import { mock_data } from "../MOCK_DATA";
+import { StudentProfile } from "./StudentProfile";
+import { LoginPage } from "./Login";
+import { RegisterPage } from "./RegisterPage";
+
 function App() {
   return (
-    <>
-      <div className="flex flex-row justify-center items-center h-screen">
-        <StudentTable data={mock_data} />
-      </div>
-    </>
+    <Router>
+      <Routes>
+        <Route path="/" element={<Navigate to="/students" replace />} />
+        <Route path="/students" element={<StudentTable />} />
+        <Route path="/student/:id" element={<StudentProfile />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
+      </Routes>
+    </Router>
   );
 }
 

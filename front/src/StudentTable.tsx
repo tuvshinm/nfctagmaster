@@ -6,7 +6,7 @@ import {
   getFilteredRowModel,
 } from "@tanstack/react-table";
 import type { Student } from "./types";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { downloadCSV } from "./utils"; // You'll need to create this utility
 const columnHelper = createColumnHelper<Student>();
 
@@ -107,9 +107,52 @@ const defaultColumns = [
   }),
 ];
 
-export function StudentTable({ data }: { data: Student[] }) {
+export function StudentTable() {
+  const [data, setData] = useState<Student[]>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [rowSelection, setRowSelection] = useState({});
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchStudents();
+  }, []);
+
+  const fetchStudents = async () => {
+    try {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        // Redirect to login if no token
+        window.location.href = "/login";
+        return;
+      }
+
+      const response = await fetch("http://localhost:8000/teacher/students", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setData(data.students);
+      } else {
+        // Handle unauthorized or other errors
+        console.error("Failed to fetch students");
+      }
+    } catch (error) {
+      console.error("Error fetching students:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center h-screen">
+        <div className="text-lg">Loading students...</div>
+      </div>
+    );
+  }
 
   const table = useReactTable({
     data,

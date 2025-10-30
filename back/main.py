@@ -22,7 +22,6 @@ import jwt
 
 # --- Authentication Models ---
 class UserRole(str, Enum):
-    STUDENT = "student"
     TEACHER = "teacher"  # Auth Level 1 - Create/delete tokens, manage daily check-in
     IT_STAFF = "it_staff"  # Auth Level 2 - Mass operations, system management
     ADMIN = "admin"  # Auth Level 3 - Full system access
@@ -30,15 +29,20 @@ class UserRole(str, Enum):
 class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     tid: str
+    name: str 
+    is_active: bool = Field(default=True)
+    role: UserRole = Field(default=UserRole.TEACHER)
+    auth_level: int = Field(default=1)  # 0=student, 1=teacher, 2=it_staff, 3=admin
+    hashed_password: Optional[str] = Field(default=None)
+    assigned_duty: Optional[bool] = Field(default=False)  # For daily "janitor" duty
+class Student(SQLModel, table=True):
+    id: int | None = Field(default=None, primary_key=True)
+    tid: str
     name: str   
     lastscan: int
     in_school: bool
-    is_active: bool = Field(default=True)
-    role: UserRole = Field(default=UserRole.STUDENT)
-    auth_level: int = Field(default=0)  # 0=student, 1=teacher, 2=it_staff, 3=admin
-    hashed_password: Optional[str] = Field(default=None)
-    assigned_duty: Optional[bool] = Field(default=False)  # For daily "janitor" duty
-
+    schoolClass: str
+    image: str
 class AuditLog(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
@@ -68,7 +72,7 @@ class UserLogin(BaseModel):
 class UserCreate(BaseModel):
     username: str
     password: str
-    role: UserRole = UserRole.STUDENT
+    role: UserRole = UserRole.TEACHER
     assigned_duty: bool = False
 
 class newUser(BaseModel):
@@ -309,7 +313,7 @@ def process_nfc_scan(tag_content: str, request: Optional[Request] = None):
     try:
         with Session(engine) as session:
             # Find the user by tag content
-            user = session.exec(select(User).where(User.tid == tag_content)).first()
+            user = session.exec(select(Student).where(Student.tid == tag_content)).first()
             if not user:
                 print(f"No user found for tag: {tag_content}")
                 return
@@ -678,67 +682,53 @@ async def get_students(current_user: User = Depends(require_auth_level(1))):
         students = session.exec(select(User).where(User.role == UserRole.STUDENT)).all()
         return {"students": students}
 
-@app.post("/teacher/token/create")
-async def create_student_token(request: Request, student_data: dict, current_user: User = Depends(require_auth_level(1))):
-    """Create a new token for a student"""
-    with Session(engine) as session:
-        student_id = student_data.get("student_id")
-        student = session.exec(select(User).where(User.id == student_id)).first()
-        if not student:
-            raise HTTPException(status_code=404, detail="Student not found")
-        
-        # Generate new UUID for the token
-        new_uuid = uuid.uuid4()
-        student.tid = str(new_uuid)
-        student.lastscan = int(time.time())
-        session.commit()
-        
-        # Log token creation
-        log_action(
-            session,
-            current_user.id,
-            "token_created",
-            "user",
-            str(student_id),
-            f"Created new token for {student.name}",
-            request.client.host,
-            request.headers.get("user-agent")
-        )
-        
-        return {"message": "Token created", "student_id": student_id, "new_tid": new_uuid}
+
 
 @app.post("/teacher/register-tag")
 async def register_student_tag(request: Request, student_data: dict, current_user: User = Depends(require_auth_level(1))):
-    """Register a new NFC tag for a student (teacher and above)"""
     global _clf
-    if _clf is None:
-        raise HTTPException(status_code=503, detail="NFC reader not available")
-    
     student_id = student_data.get("student_id")
     student_name = student_data.get("student_name")
-    
-    if not student_id or not student_name:
-        raise HTTPException(status_code=400, detail="Student ID and name are required")
-    
+    if not student_name:
+        raise HTTPException(status_code=400, detail="Student name is required")
+    def _save_student_with_tid(session: Session, name: str, tid_str: str, payload: dict):
+            student = session.exec(select(Student).where(Student.name == name)).first()
+            if not student:
+                raise HTTPException(status_code=404, detail="Student not found")
+            if payload.get("schoolClass") is not None:
+                student.schoolClass = payload.get("schoolClass")
+            if payload.get("image") is not None:
+                student.image = payload.get("image")
+            session.commit()
+            student = Student(
+                name=name,
+                tid=tag_uuid,
+                lastscan=int(time.time()),
+                in_school=False,
+                schoolClass=payload.get("schoolClass", ""),
+                image=payload.get("image", "")
+            )
+            session.refresh(student)
+            return student, old_tid    
+    if _clf is None:
+        raise HTTPException(status_code=503, detail="NFC reader not available")
     def register_tag():
         written = False
         message = None
-        new_uuid = None
-        
+        tag_uuid = None
         def on_connect(tag):
-            nonlocal written, message, new_uuid
+            nonlocal written, message, tag_uuid
             try:
                 if getattr(tag, "ndef", None):
                     # Generate new UUID for the tag
-                    new_uuid = uuid.uuid4()
-                    
-                    # Write the UUID to the tag
-                    record = TextRecord(str(new_uuid))
+                    tag_uuid = uuid.uuid4()
+                    record = TextRecord(str(tag_uuid))
                     tag.ndef.records = [record]
-                    
                     written = True
-                    message = f"Tag registered with UUID: {new_uuid}"
-                    print(message)
+                    message = f"Tag registered with UUID: {tag_uuid}"
+                    with Session(engine) as session:
+                        _save_student_with_tid(session, student_id, student_name, str(tag_uuid), student_data)
+                    print (message)
                 else:
                     message = "Tag is not NDEF-compatible"
                     print(message)
@@ -747,16 +737,12 @@ async def register_student_tag(request: Request, student_data: dict, current_use
                 message = f"Registration error: {repr(e)}"
                 print(message)
                 return False
-
         start = time.time()
-
         def terminate():
-            return (time.time() - start) > 10.0  # 10 second timeout
-
+            return (time.time() - start) > 20.0  # 20 second timeout to allow user to tap
         acquired = _clf_lock.acquire(timeout=0.5)
         if not acquired:
             return {"written": False, "reason": "reader busy"}
-
         try:
             try:
                 _clf.connect(rdwr={"on-connect": on_connect}, terminate=terminate)
@@ -764,44 +750,35 @@ async def register_student_tag(request: Request, student_data: dict, current_use
                 return {"written": False, "reason": f"connect error: {repr(e)}"}
         finally:
             _clf_lock.release()
-
         if written:
-            return {"written": True, "reason": message, "tag_uuid": new_uuid}
+            return {"written": True, "reason": message, "tag_uuid": tag_uuid}
         else:
             return {"written": False, "reason": message or "no tag presented within timeout"}
-
+    # Informational: client should show "Please press NFC tag on reader" while awaiting.
     result = await run_in_threadpool(register_tag)
-    
     if result.get("written", False):
-        # Update student record with new tag
+        tag_uuid = str(result["tag_uuid"])
         with Session(engine) as session:
-            student = session.exec(select(User).where(User.id == student_id)).first()
-            if not student:
-                raise HTTPException(status_code=404, detail="Student not found")
-            
-            old_tid = student.tid
-            student.tid = str(result["tag_uuid"])
-            student.lastscan = int(time.time())
-            session.commit()
-            
+            student, old_tid = _save_student_with_tid(session, student_id, student_name, tag_uuid, student_data)
             # Log tag registration
             log_action(
                 session,
                 current_user.id,
                 "tag_registered",
-                "user",
-                str(student_id),
-                f"Registered new tag {result['tag_uuid']} for {student_name} (old: {old_tid})",
+                "student",
+                str(student.id),
+                f"Registered new tag {tag_uuid} for {student.name} (old: {old_tid})",
                 request.client.host,
                 request.headers.get("user-agent")
             )
-            
             return {
                 "message": "Tag registered successfully",
-                "student_id": student_id,
-                "student_name": student_name,
-                "tag_uuid": result["tag_uuid"]
+                "student_id": student.id,
+                "student_name": student.name,
+                "tag_uuid": tag_uuid,
+                "mode": "write"
             }
+
     else:
         raise HTTPException(status_code=504, detail=result.get("reason", "registration failed"))
 
@@ -1105,7 +1082,7 @@ async def write_item(newTag: newUser, current_user: User = Depends(require_auth_
         # Update user record with new tag
         with Session(engine) as session:
             # Check if user already exists
-            existing_user = session.exec(select(User).where(User.id == newTag.id)).first()
+            existing_user = session.exec(select(Student).where(Student.id == newTag.id)).first()
             if not existing_user:
                 raise HTTPException(status_code=404, detail="User not found")
             
