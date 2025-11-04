@@ -14,7 +14,8 @@ from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from datetime import datetime, timedelta
+from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 import secrets
 import hashlib
@@ -28,9 +29,8 @@ class UserRole(str, Enum):
 
 class User(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    tid: str
     name: str 
-    is_active: bool = Field(default=True)
+    is_active: bool = Field(default=True) 
     role: UserRole = Field(default=UserRole.TEACHER)
     auth_level: int = Field(default=1)  # 0=student, 1=teacher, 2=it_staff, 3=admin
     hashed_password: Optional[str] = Field(default=None)
@@ -74,6 +74,7 @@ class UserCreate(BaseModel):
     password: str
     role: UserRole = UserRole.TEACHER
     assigned_duty: bool = False
+    is_active: bool = True
 
 class newUser(BaseModel):
     id: int | None = Field(default=None, primary_key=True)
@@ -101,9 +102,9 @@ def get_password_hash(password):
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.now(datetime.timezone.utc) + expires_delta
+        expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(datetime.timezone.utc) + timedelta(minutes=15)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -472,7 +473,13 @@ async def lifespan(app: FastAPI):
 # Assign the lifespan handler (replace previous FastAPI instance)
 app = FastAPI(lifespan=lifespan)
 
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 @app.get("/")
 def root():
     return {"status": "NFC scanner running"}
@@ -502,6 +509,7 @@ async def register_user(request: Request, user: UserCreate):
             hashed_password=hashed_password,
             role=user.role,
             auth_level=auth_level,
+            is_active=True,
             assigned_duty=user.assigned_duty
         )
         session.add(db_user)

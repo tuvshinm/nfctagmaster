@@ -5,13 +5,15 @@ interface RegisterFormData {
   username: string;
   password: string;
   role: string;
+  assigned_duty: boolean;
 }
 
 export function RegisterPage() {
   const [formData, setFormData] = useState<RegisterFormData>({
     username: "",
     password: "",
-    role: "student",
+    role: "teacher",
+    assigned_duty: true,
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -123,7 +125,6 @@ export function RegisterPage() {
                 value={formData.role}
                 onChange={handleChange}
               >
-                <option value="student">Student</option>
                 <option value="teacher">Teacher</option>
                 <option value="it_staff">IT Staff</option>
                 <option value="admin">Admin</option>
