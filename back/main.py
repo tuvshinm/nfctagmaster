@@ -41,8 +41,6 @@ class Student(SQLModel, table=True):
     name: str   
     lastscan: int
     in_school: bool
-    schoolClass: str
-    image: str
 class AuditLog(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
@@ -134,7 +132,7 @@ security = HTTPBearer()
 
 async def get_current_user(request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)):
     credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
+        status_code=401,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
@@ -165,7 +163,7 @@ def require_auth_level(required_level: int):
     def dependency(current_user: User = Depends(get_current_active_user)):
         if current_user.auth_level < required_level:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=403,
                 detail=f"Insufficient privileges. Required level {required_level}, you have level {current_user.auth_level}"
             )
         return current_user
@@ -176,7 +174,7 @@ def require_role(required_role: UserRole):
     def dependency(current_user: User = Depends(get_current_active_user)):
         if current_user.role != required_role and current_user.role != UserRole.ADMIN:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=403,
                 detail=f"Role {required_role} required"
             )
         return current_user
@@ -552,7 +550,7 @@ async def login_for_access_token(request: Request, form_data: UserLogin):
         user = authenticate_user(session, form_data.username, form_data.password)
         if not user:
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
+                status_code=401,
                 detail="Incorrect username or password",
                 headers={"WWW-Authenticate": "Bearer"},
             )
@@ -649,8 +647,7 @@ async def get_current_duty(current_user: User = Depends(require_auth_level(1))):
         if duty_teacher:
             return {
                 "teacher_name": duty_teacher.name,
-                "teacher_id": duty_teacher.id,
-                "tid": duty_teacher.tid
+                "teacher_id": duty_teacher.id
             }
         return {"message": "No teacher currently on duty"}
 
@@ -659,7 +656,9 @@ async def assign_duty(teacher_id: int, current_user: User = Depends(require_auth
     """Assign a teacher to daily duty"""
     with Session(engine) as session:
         # Remove current duty assignment
-        session.exec(select(User).where(User.assigned_duty == True)).update({"assigned_duty": False})
+        duty_users = session.exec(select(User).where(User.assigned_duty == True)).all()
+        for user in duty_users:
+            user.assigned_duty = False
         
         # Assign new duty
         teacher = session.exec(select(User).where(User.id == teacher_id)).first()
@@ -687,7 +686,7 @@ async def assign_duty(teacher_id: int, current_user: User = Depends(require_auth
 async def get_students(current_user: User = Depends(require_auth_level(1))):
     """Get all students (teacher view)"""
     with Session(engine) as session:
-        students = session.exec(select(User).where(User.role == UserRole.STUDENT)).all()
+        students = session.exec(select(Student)).all()
         return {"students": students}
 
 
@@ -795,7 +794,7 @@ async def register_student_tag(request: Request, student_data: dict, current_use
 async def get_all_students(current_user: User = Depends(require_auth_level(2))):
     """Get all students with filtering options (IT staff view)"""
     with Session(engine) as session:
-        students = session.exec(select(User).where(User.role == UserRole.STUDENT)).all()
+        students = session.exec(select(Student)).all()
         return {"students": students}
 
 @app.delete("/it/students/{student_id}")
@@ -840,7 +839,7 @@ async def register_student_tag_it(request: Request, student_data: dict, current_
 async def get_check_in_status(current_user: User = Depends(require_auth_level(1))):
     """Get current check-in status for all students"""
     with Session(engine) as session:
-        students = session.exec(select(User).where(User.role == UserRole.STUDENT)).all()
+        students = session.exec(select(Student)).all()
         status_data = []
         
         for student in students:
