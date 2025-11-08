@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { AddStudentModal } from "./components/AddStudentModal";
 
 interface Student {
   id: number;
@@ -33,6 +34,11 @@ export function TeacherDashboard() {
   const [error, setError] = useState("");
   const [showAssignDuty, setShowAssignDuty] = useState(false);
   const [selectedTeacherId, setSelectedTeacherId] = useState<number>(1);
+  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [newlyCreatedStudentId, setNewlyCreatedStudentId] = useState<
+    number | null
+  >(null);
+  const [isAddingStudent, setIsAddingStudent] = useState(false);
 
   // Check authentication
   useEffect(() => {
@@ -120,6 +126,61 @@ export function TeacherDashboard() {
 
   const formatTime = (timestamp: string) => {
     return new Date(timestamp).toLocaleString();
+  };
+
+  // Add student handler
+  const handleAddStudent = async (student: { name: string; class: string }) => {
+    setIsAddingStudent(true);
+    try {
+      const token = localStorage.getItem("token");
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+
+      const response = await fetch("http://localhost:8000/teacher/students", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          name: student.name,
+          class_name: student.class,
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        setNewlyCreatedStudentId(result.student_id);
+        await fetchDashboardData(); // Refresh data
+      } else {
+        setError("Failed to add student");
+      }
+    } catch {
+      setError("Failed to add student");
+    } finally {
+      setIsAddingStudent(false);
+    }
+  };
+
+  // Handle NFC tag registration
+  const handleRegisterNfcTag = async (studentId: number) => {
+    const token = localStorage.getItem("token");
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+
+    const response = await fetch("http://localhost:8000/teacher/register-tag", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        student_id: studentId,
+        student_name: "New Student", // This will be updated by backend
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Failed to register NFC tag");
+    }
   };
 
   if (isLoading) {
@@ -224,9 +285,17 @@ export function TeacherDashboard() {
 
           {/* Students Check-in Status */}
           <div className="mt-6 bg-white shadow rounded-lg p-6">
-            <h2 className="text-xl font-semibold text-gray-900 mb-4">
-              Student Check-in Status
-            </h2>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-gray-900">
+                Student Check-in Status
+              </h2>
+              <button
+                onClick={() => setShowAddStudentModal(true)}
+                className="px-4 py-2 text-sm text-white bg-green-600 rounded hover:bg-green-700"
+              >
+                Add New Student
+              </button>
+            </div>
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead className="bg-gray-50">
@@ -356,6 +425,19 @@ export function TeacherDashboard() {
           </div>
         </div>
       )}
+
+      {/* Add Student Modal */}
+      <AddStudentModal
+        isOpen={showAddStudentModal}
+        onClose={() => {
+          setShowAddStudentModal(false);
+          setNewlyCreatedStudentId(null);
+        }}
+        onAddStudent={handleAddStudent}
+        onRegisterNfcTag={handleRegisterNfcTag}
+        isLoading={isAddingStudent}
+        studentId={newlyCreatedStudentId}
+      />
     </div>
   );
 }

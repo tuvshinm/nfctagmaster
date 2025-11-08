@@ -300,7 +300,7 @@ class TestStudentManagement(unittest.TestCase):
         
         # Test endpoint
         headers = {"Authorization": f"Bearer {token}"}
-        response = self.client.get("/teacher/students", headers=headers)
+        response = self.client.get("/it/students", headers=headers)
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("students", data)
@@ -437,7 +437,7 @@ class TestErrorHandling(unittest.TestCase):
     def test_protected_endpoints_without_auth(self):
         """Test that protected endpoints fail without authentication"""
         protected_endpoints = [
-            ("/teacher/students", "GET"),
+            ("/it/students", "GET"),
             ("/teacher/register-tag", "POST"),
             ("/teacher/current-duty", "GET"),
             ("/system/scan-test", "GET")
@@ -477,6 +477,513 @@ class TestErrorHandling(unittest.TestCase):
                                    data="invalid json", 
                                    headers=headers)
         self.assertEqual(response.status_code, 422)
+
+
+class TestAdminEndpoints(unittest.TestCase):
+    """Test admin-level endpoints and system management"""
+    
+    def setUp(self):
+        self.client = TestClient(app)
+        
+    def setup_admin_user(self):
+        """Helper method to create and authenticate an admin user"""
+        # Register an admin user
+        admin_data = {
+            "username": f"admin_{int(time.time())}",
+            "password": "adminpass123",
+            "role": UserRole.ADMIN
+        }
+        self.client.post("/register", json=admin_data)
+        
+        # Login and get token
+        login_data = {
+            "username": admin_data["username"],
+            "password": admin_data["password"]
+        }
+        login_response = self.client.post("/login", json=login_data)
+        return login_response.json()["access_token"]
+        
+    def setup_teacher_user(self):
+        """Helper method to create and authenticate a teacher user"""
+        teacher_data = {
+            "username": f"teacher_{int(time.time())}",
+            "password": "teacherpass123",
+            "role": UserRole.TEACHER
+        }
+        self.client.post("/register", json=teacher_data)
+        
+        login_data = {
+            "username": teacher_data["username"],
+            "password": teacher_data["password"]
+        }
+        login_response = self.client.post("/login", json=login_data)
+        return login_response.json()["access_token"]
+        
+    def setup_student(self, session, name="Test Student", class_name="10A"):
+        """Helper method to create a student"""
+        student = Student(
+            name=name,
+            tid=str(uuid.uuid4()),
+            lastscan=int(time.time()),
+            in_school=False,
+            schoolClass=class_name
+        )
+        session.add(student)
+        session.commit()
+        session.refresh(student)
+        return student
+        
+    def test_admin_users_endpoint(self):
+        """Test admin users listing endpoint"""
+        # Setup admin user
+        token = self.setup_admin_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.get("/admin/users", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("users", data)
+        self.assertIsInstance(data["users"], list)
+        
+    def test_admin_users_endpoint_without_auth(self):
+        """Test that admin users endpoint fails without authentication"""
+        response = self.client.get("/admin/users")
+        self.assertEqual(response.status_code, 403)
+        
+    def test_admin_users_endpoint_with_teacher_auth(self):
+        """Test that admin users endpoint fails with teacher authentication"""
+        # Register a teacher explicitly to ensure clean state
+        teacher_data = {
+            "username": f"teacher_test_{int(time.time())}",
+            "password": "testpass123",
+            "role": UserRole.TEACHER
+        }
+        self.client.post("/register", json=teacher_data)
+        
+        # Login and get token
+        login_data = {
+            "username": teacher_data["username"],
+            "password": teacher_data["password"]
+        }
+        login_response = self.client.post("/login", json=login_data)
+        token = login_response.json()["access_token"]
+        
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Try to access admin endpoint
+        response = self.client.get("/admin/users", headers=headers)
+        self.assertEqual(response.status_code, 403)
+        
+    def test_admin_system_metrics_endpoint(self):
+        """Test admin system metrics endpoint"""
+        # Setup admin user
+        token = self.setup_admin_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.get("/admin/system-metrics", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        
+        # Check required fields
+        required_fields = [
+            "total_users", "active_users", "total_checkins",
+            "today_checkins", "system_uptime", "database_size",
+            "nfc_reader_status"
+        ]
+        for field in required_fields:
+            self.assertIn(field, data)
+            
+    def test_admin_system_config_endpoint(self):
+        """Test admin system configuration endpoint"""
+        # Setup admin user
+        token = self.setup_admin_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test GET endpoint
+        response = self.client.get("/admin/system-config", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        
+        # Check required fields
+        required_fields = [
+            "auto_backup_enabled", "backup_frequency", "session_timeout",
+            "max_login_attempts", "nfc_scan_timeout", "enable_notifications"
+        ]
+        for field in required_fields:
+            self.assertIn(field, data)
+            
+    def test_admin_system_config_update_endpoint(self):
+        """Test admin system configuration update endpoint"""
+        # Setup admin user
+        token = self.setup_admin_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test PUT endpoint
+        config_data = {
+            "auto_backup_enabled": True,
+            "backup_frequency": "weekly",
+            "session_timeout": 30,
+            "max_login_attempts": 5,
+            "nfc_scan_timeout": 10,
+            "enable_notifications": False
+        }
+        
+        response = self.client.put("/admin/system-config",
+                                 json=config_data,
+                                 headers=headers)
+        self.assertEqual(response.status_code, 200)
+        
+    def test_admin_audit_logs_endpoint(self):
+        """Test admin audit logs endpoint"""
+        # Setup admin user
+        token = self.setup_admin_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.get("/admin/audit-logs", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("logs", data)
+        self.assertIsInstance(data["logs"], list)
+        
+    def test_admin_generate_report_endpoint(self):
+        """Test admin generate report endpoint"""
+        # Setup admin user
+        token = self.setup_admin_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.post("/admin/generate-report", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("report", data)
+        
+        # Check report structure
+        report = data["report"]
+        required_fields = [
+            "generated_at", "total_users", "active_users",
+            "total_students", "total_checkins"
+        ]
+        for field in required_fields:
+            self.assertIn(field, report)
+            
+    def test_admin_export_data_endpoint(self):
+        """Test admin export data endpoint"""
+        # Setup admin user
+        token = self.setup_admin_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.post("/admin/export-data", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("data", data)
+        
+        # Check export structure
+        export_data = data["data"]
+        required_fields = ["exported_at", "users", "students", "audit_logs"]
+        for field in required_fields:
+            self.assertIn(field, export_data)
+            
+    def test_admin_create_backup_endpoint(self):
+        """Test admin create backup endpoint"""
+        # Setup admin user
+        token = self.setup_admin_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.post("/admin/create-backup", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("backup", data)
+        
+        # Check backup structure
+        backup = data["backup"]
+        required_fields = ["backup_id", "created_at", "size", "status"]
+        for field in required_fields:
+            self.assertIn(field, backup)
+            
+    def test_admin_maintenance_endpoint(self):
+        """Test admin maintenance endpoint"""
+        # Setup admin user
+        token = self.setup_admin_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.post("/admin/maintenance", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("tasks", data)
+        self.assertIsInstance(data["tasks"], list)
+        
+    def test_admin_emergency_shutdown_endpoint(self):
+        """Test admin emergency shutdown endpoint"""
+        # Setup admin user
+        token = self.setup_admin_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.post("/admin/emergency-shutdown", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("message", data)
+        
+    def test_admin_user_role_update(self):
+        """Test admin user role update endpoint"""
+        # Setup admin and teacher users
+        admin_token = self.setup_admin_user()
+        teacher_token = self.setup_teacher_user()
+        
+        # Get teacher user ID from the setup method
+        teacher_data = {
+            "username": f"teacher_{int(time.time())}",
+            "password": "teacherpass123",
+            "role": UserRole.TEACHER
+        }
+        self.client.post("/register", json=teacher_data)
+        login_response = self.client.post("/login", json=teacher_data)
+        teacher_id = login_response.json()["user_id"]
+        
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+        
+        # Update teacher role to admin
+        response = self.client.get(f"/admin/users/{teacher_id}/role",
+                                 params={"role": "admin"},
+                                 headers=admin_headers)
+        self.assertEqual(response.status_code, 200)
+        
+    def test_admin_user_deletion(self):
+        """Test admin user deletion endpoint"""
+        # Setup admin and teacher users
+        admin_token = self.setup_admin_user()
+        teacher_token = self.setup_teacher_user()
+        
+        # Get teacher user ID
+        login_response = self.client.post("/login", json={
+            "username": f"teacher_{int(time.time())}",
+            "password": "teacherpass123"
+        })
+        teacher_id = login_response.json()["user_id"]
+        
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+        
+        # Delete teacher user
+        response = self.client.delete(f"/admin/users/{teacher_id}",
+                                    headers=admin_headers)
+        self.assertEqual(response.status_code, 200)
+        
+    def test_admin_user_activation(self):
+        """Test admin user activation endpoint"""
+        # Setup admin and teacher users
+        admin_token = self.setup_admin_user()
+        teacher_token = self.setup_teacher_user()
+        
+        # Get teacher user ID
+        login_response = self.client.post("/login", json={
+            "username": f"teacher_{int(time.time())}",
+            "password": "teacherpass123"
+        })
+        teacher_id = login_response.json()["user_id"]
+        
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+        
+        # Deactivate user first
+        response = self.client.get(f"/admin/users/{teacher_id}/deactivate",
+                                 headers=admin_headers)
+        self.assertEqual(response.status_code, 200)
+        
+        # Activate user
+        response = self.client.get(f"/admin/users/{teacher_id}/activate",
+                                 headers=admin_headers)
+        self.assertEqual(response.status_code, 200)
+
+
+class TestITStaffEndpoints(unittest.TestCase):
+    """Test IT staff-level endpoints"""
+    
+    def setUp(self):
+        self.client = TestClient(app)
+        
+    def setup_it_staff_user(self):
+        """Helper method to create and authenticate an IT staff user"""
+        it_staff_data = {
+            "username": f"itstaff_{int(time.time())}",
+            "password": "itpass123",
+            "role": UserRole.IT_STAFF
+        }
+        self.client.post("/register", json=it_staff_data)
+        
+        login_data = {
+            "username": it_staff_data["username"],
+            "password": it_staff_data["password"]
+        }
+        login_response = self.client.post("/login", json=login_data)
+        return login_response.json()["access_token"]
+        
+    def setup_student(self, session, name="Test Student", class_name="10A"):
+        """Helper method to create a student"""
+        student = Student(
+            name=name,
+            tid=str(uuid.uuid4()),
+            lastscan=int(time.time()),
+            in_school=False,
+            schoolClass=class_name
+        )
+        session.add(student)
+        session.commit()
+        session.refresh(student)
+        return student
+        
+    def test_it_students_endpoint(self):
+        """Test IT staff students endpoint"""
+        # Setup IT staff user
+        token = self.setup_it_staff_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.get("/it/students", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("students", data)
+        self.assertIsInstance(data["students"], list)
+        
+    def test_it_students_endpoint_without_auth(self):
+        """Test that IT students endpoint fails without authentication"""
+        response = self.client.get("/it/students")
+        self.assertEqual(response.status_code, 403)
+        
+    def test_it_students_endpoint_with_teacher_auth(self):
+        """Test that IT students endpoint allows teacher authentication"""
+        # Register a teacher explicitly to ensure clean state
+        teacher_data = {
+            "username": f"teacher_it_test_{int(time.time())}",
+            "password": "testpass123",
+            "role": UserRole.TEACHER
+        }
+        self.client.post("/register", json=teacher_data)
+        
+        login_data = {
+            "username": teacher_data["username"],
+            "password": teacher_data["password"]
+        }
+        login_response = self.client.post("/login", json=login_data)
+        token = login_response.json()["access_token"]
+        
+        headers = {"Authorization": f"Bearer {token}"}
+        response = self.client.get("/it/students", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        
+    def test_it_audit_logs_endpoint(self):
+        """Test IT staff audit logs endpoint"""
+        # Setup IT staff user
+        token = self.setup_it_staff_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.get("/it/audit-logs", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("logs", data)
+        self.assertIsInstance(data["logs"], list)
+        
+    def test_it_student_deletion(self):
+        """Test IT staff student deletion endpoint"""
+        # Setup IT staff user and create a student
+        token = self.setup_it_staff_user()
+        
+        with Session(engine) as session:
+            student = self.setup_student(session, "Delete Me Student", "10B")
+            student_id = student.id
+            
+        it_headers = {"Authorization": f"Bearer {token}"}
+        
+        # Delete student
+        response = self.client.delete(f"/it/students/{student_id}",
+                                    headers=it_headers)
+        self.assertEqual(response.status_code, 200)
+        
+        # Verify student is deleted
+        with Session(engine) as session:
+            deleted_student = session.exec(select(Student).where(Student.id == student_id)).first()
+            self.assertIsNone(deleted_student)
+
+
+class TestTeacherEndpoints(unittest.TestCase):
+    """Test teacher-level endpoints"""
+    
+    def setUp(self):
+        self.client = TestClient(app)
+        
+    def setup_teacher_user(self):
+        """Helper method to create and authenticate a teacher user"""
+        teacher_data = {
+            "username": f"teacher_{int(time.time())}",
+            "password": "teacherpass123",
+            "role": UserRole.TEACHER
+        }
+        self.client.post("/register", json=teacher_data)
+        
+        login_data = {
+            "username": teacher_data["username"],
+            "password": teacher_data["password"]
+        }
+        login_response = self.client.post("/login", json=login_data)
+        return login_response.json()["access_token"]
+        
+    def setup_student(self, session, name="Test Student", class_name="10A"):
+        """Helper method to create a student"""
+        student = Student(
+            name=name,
+            tid=str(uuid.uuid4()),
+            lastscan=int(time.time()),
+            in_school=False,
+            schoolClass=class_name
+        )
+        session.add(student)
+        session.commit()
+        session.refresh(student)
+        return student
+        
+    def test_teacher_students_endpoint(self):
+        """Test teacher students endpoint"""
+        # Setup teacher user
+        token = self.setup_teacher_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.get("/it/students", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("students", data)
+        self.assertIsInstance(data["students"], list)
+        
+    def test_teacher_check_in_status_endpoint(self):
+        """Test teacher check-in status endpoint"""
+        # Setup teacher user
+        token = self.setup_teacher_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.get("/teacher/check-in-status", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("students", data)
+        self.assertIsInstance(data["students"], list)
+        
+    def test_teacher_check_in_logs_endpoint(self):
+        """Test teacher check-in logs endpoint"""
+        # Setup teacher user
+        token = self.setup_teacher_user()
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Test endpoint
+        response = self.client.get("/teacher/check-in-logs", headers=headers)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("logs", data)
+        self.assertIsInstance(data["logs"], list)
 
 
 if __name__ == '__main__':

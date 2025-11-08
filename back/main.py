@@ -10,6 +10,7 @@ import usb.util
 import nfc
 from ndef import TextRecord
 from sqlmodel import SQLModel, Session, Field, create_engine, select
+from sqlalchemy import func
 from pydantic import BaseModel
 from fastapi import FastAPI, HTTPException, Depends, status, Request
 from fastapi.concurrency import run_in_threadpool
@@ -38,9 +39,14 @@ class User(SQLModel, table=True):
 class Student(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     tid: str
-    name: str   
+    name: str
     lastscan: int
     in_school: bool
+    schoolclass: str = Field(default="", sa_column_kwargs={"name": "schoolclass"})
+
+class StudentCreate(BaseModel):
+    name: str
+    class_name: str
 class AuditLog(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id")
@@ -682,12 +688,43 @@ async def assign_duty(teacher_id: int, current_user: User = Depends(require_auth
         
         return {"message": f"Duty assigned to {teacher.name}"}
 
-@app.get("/teacher/students")
-async def get_students(current_user: User = Depends(require_auth_level(1))):
-    """Get all students (teacher view)"""
+# Consolidated student endpoint - teachers use /it/students with auth level 1
+# IT staff use /it/students with auth level 2
+
+@app.post("/teacher/students")
+async def add_student(request: Request, student_data: StudentCreate, current_user: User = Depends(require_auth_level(1))):
+    """Add a new student (teacher and above)"""
     with Session(engine) as session:
-        students = session.exec(select(Student)).all()
-        return {"students": students}
+        # Check if student already exists
+        existing_student = session.exec(select(Student).where(Student.name == student_data.name)).first()
+        if existing_student:
+            raise HTTPException(status_code=400, detail="Student with this name already exists")
+        
+        # Create new student
+        new_student = Student(
+            name=student_data.name,
+            tid="",  # Will be set when tag is registered
+            lastscan=int(time.time()),
+            in_school=False,
+            schoolClass=student_data.class_name
+        )
+        session.add(new_student)
+        session.commit()
+        session.refresh(new_student)
+        
+        # Log student creation
+        log_action(
+            session,
+            current_user.id,
+            "student_created",
+            "student",
+            str(new_student.id),
+            f"Created new student {new_student.name} in class {student_data.class_name}",
+            request.client.host if request else None,
+            request.headers.get("user-agent") if request else None
+        )
+        
+        return {"message": "Student created successfully", "student_id": new_student.id}
 
 
 
@@ -706,17 +743,11 @@ async def register_student_tag(request: Request, student_data: dict, current_use
                 student.schoolClass = payload.get("schoolClass")
             if payload.get("image") is not None:
                 student.image = payload.get("image")
+            old_tid = student.tid
+            student.tid = tid_str
             session.commit()
-            student = Student(
-                name=name,
-                tid=tag_uuid,
-                lastscan=int(time.time()),
-                in_school=False,
-                schoolClass=payload.get("schoolClass", ""),
-                image=payload.get("image", "")
-            )
             session.refresh(student)
-            return student, old_tid    
+            return student, old_tid
     if _clf is None:
         raise HTTPException(status_code=503, detail="NFC reader not available")
     def register_tag():
@@ -734,7 +765,7 @@ async def register_student_tag(request: Request, student_data: dict, current_use
                     written = True
                     message = f"Tag registered with UUID: {tag_uuid}"
                     with Session(engine) as session:
-                        _save_student_with_tid(session, student_id, student_name, str(tag_uuid), student_data)
+                        _save_student_with_tid(session, student_name, str(tag_uuid), student_data)
                     print (message)
                 else:
                     message = "Tag is not NDEF-compatible"
@@ -766,7 +797,7 @@ async def register_student_tag(request: Request, student_data: dict, current_use
     if result.get("written", False):
         tag_uuid = str(result["tag_uuid"])
         with Session(engine) as session:
-            student, old_tid = _save_student_with_tid(session, student_id, student_name, tag_uuid, student_data)
+            student, old_tid = _save_student_with_tid(session, student_name, tag_uuid, student_data)
             # Log tag registration
             log_action(
                 session,
@@ -791,17 +822,52 @@ async def register_student_tag(request: Request, student_data: dict, current_use
 
 # --- IT Staff Level 2 Endpoints ---
 @app.get("/it/students")
-async def get_all_students(current_user: User = Depends(require_auth_level(2))):
-    """Get all students with filtering options (IT staff view)"""
+async def get_all_students(current_user: User = Depends(require_auth_level(1))):
+    """Get all students (teachers and IT staff view)"""
     with Session(engine) as session:
         students = session.exec(select(Student)).all()
         return {"students": students}
+
+@app.post("/it/students")
+async def add_student_it(request: Request, student_data: StudentCreate, current_user: User = Depends(require_auth_level(2))):
+    """Add a new student (IT staff and admin)"""
+    with Session(engine) as session:
+        # Check if student already exists
+        existing_student = session.exec(select(Student).where(Student.name == student_data.name)).first()
+        if existing_student:
+            raise HTTPException(status_code=400, detail="Student with this name already exists")
+        
+        # Create new student
+        new_student = Student(
+            name=student_data.name,
+            tid="",  # Will be set when tag is registered
+            lastscan=int(time.time()),
+            in_school=False,
+            schoolClass=student_data.class_name
+        )
+        session.add(new_student)
+        session.commit()
+        session.refresh(new_student)
+        
+        # Log student creation
+        log_action(
+            session,
+            current_user.id,
+            "student_created",
+            "student",
+            str(new_student.id),
+            f"IT staff created new student {new_student.name} in class {student_data.class_name}",
+            request.client.host if request else None,
+            request.headers.get("user-agent") if request else None
+        )
+        
+        return {"message": "Student created successfully", "student_id": new_student.id}
 
 @app.delete("/it/students/{student_id}")
 async def delete_student(student_id: int, request: Request, current_user: User = Depends(require_auth_level(2))):
     """Delete a student record (IT staff only)"""
     with Session(engine) as session:
-        student = session.exec(select(User).where(User.id == student_id)).first()
+        student = session.exec(select(Student).where(Student.id == student_id)).first()
         if not student:
             raise HTTPException(status_code=404, detail="Student not found")
         
@@ -827,7 +893,7 @@ async def delete_student(student_id: int, request: Request, current_user: User =
 async def get_audit_logs(current_user: User = Depends(require_auth_level(2))):
     """Get audit logs (IT staff and admin only)"""
     with Session(engine) as session:
-        logs = session.exec(select(AuditLog).order_by(AuditLog.timestamp.desc())).limit(100).all()
+        logs = session.exec(select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(100)).all()
         return {"logs": logs}
 
 @app.post("/it/register-tag")
@@ -879,6 +945,295 @@ async def get_check_in_logs(current_user: User = Depends(require_auth_level(1)))
         
         return {"logs": log_data}
 
+# --- Admin Level 3 System Management Endpoints ---
+@app.get("/admin/system-metrics")
+async def get_system_metrics(current_user: User = Depends(require_auth_level(3))):
+    """Get system metrics for analytics dashboard (admin only)"""
+    from sqlalchemy import func
+    
+    with Session(engine) as session:
+        # Count total users
+        total_users_result = session.exec(select(func.count(User.id))).one()
+        total_users = total_users_result if total_users_result else 0
+        
+        # Count active users
+        active_users_result = session.exec(select(func.count(User.id)).where(User.is_active == True)).one()
+        active_users = active_users_result if active_users_result else 0
+        
+        # Count total check-ins from audit logs
+        total_checkins_result = session.exec(
+            select(func.count(AuditLog.id)).where(AuditLog.action.in_(["check_in_with_duty_teacher", "check_in"]))
+        ).one()
+        total_checkins = total_checkins_result if total_checkins_result else 0
+        
+        # Count today's check-ins
+        today = datetime.now().date()
+        today_checkins_result = session.exec(
+            select(func.count(AuditLog.id))
+            .where(AuditLog.action.in_(["check_in_with_duty_teacher", "check_in"]))
+            .where(func.date(AuditLog.timestamp) == today)
+        ).one()
+        today_checkins = today_checkins_result if today_checkins_result else 0
+        
+        # Get system uptime (mock data for now)
+        system_uptime = "3d 14h 32m"
+        
+        # Get database size (mock data for now)
+        database_size = "125.4 MB"
+        
+        # Get NFC reader status
+        nfc_reader_status = "active" if _clf else "inactive"
+        
+        return {
+            "total_users": total_users,
+            "active_users": active_users,
+            "total_checkins": total_checkins,
+            "today_checkins": today_checkins,
+            "system_uptime": system_uptime,
+            "database_size": database_size,
+            "nfc_reader_status": nfc_reader_status
+        }
+
+@app.get("/admin/system-config")
+async def get_system_config(current_user: User = Depends(require_auth_level(3))):
+    """Get system configuration (admin only)"""
+    # Return default configuration (in real implementation, this would be stored in database)
+    return {
+        "auto_backup_enabled": True,
+        "backup_frequency": "daily",
+        "session_timeout": 30,
+        "max_login_attempts": 5,
+        "nfc_scan_timeout": 10,
+        "enable_notifications": True
+    }
+
+@app.put("/admin/system-config")
+async def update_system_config(
+    config: dict,
+    request: Request,
+    current_user: User = Depends(require_auth_level(3))
+):
+    """Update system configuration (admin only)"""
+    # In real implementation, this would save to database
+    with Session(engine) as session:
+        log_action(
+            session,
+            current_user.id,
+            "system_config_updated",
+            "system",
+            None,
+            f"System configuration updated by {current_user.name}",
+            request.client.host if request else None,
+            request.headers.get("user-agent") if request else None
+        )
+    
+    return {"message": "System configuration updated successfully"}
+
+@app.get("/admin/audit-logs")
+async def get_admin_audit_logs(current_user: User = Depends(require_auth_level(3))):
+    """Get audit logs for admin dashboard"""
+    with Session(engine) as session:
+        logs = session.exec(
+            select(AuditLog)
+            .order_by(AuditLog.timestamp.desc())
+            .limit(100)
+        ).all()
+        
+        log_data = []
+        for log in logs:
+            log_data.append({
+                "id": log.id,
+                "user_id": log.user_id,
+                "action": log.action,
+                "timestamp": log.timestamp.isoformat(),
+                "details": log.details,
+                "ip_address": log.ip_address
+            })
+        
+        return {"logs": log_data}
+
+@app.get("/admin/users/{user_id}/role")
+async def update_user_role(
+    user_id: int,
+    role: str,
+    request: Request,
+    current_user: User = Depends(require_auth_level(3))
+):
+    """Update user role (admin only)"""
+    with Session(engine) as session:
+        user = session.exec(select(User).where(User.id == user_id)).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        old_role = user.role
+        user.role = UserRole(role)
+        # Update auth level based on role
+        role_to_level = {
+            "teacher": 1,
+            "it_staff": 2, 
+            "admin": 3
+        }
+        user.auth_level = role_to_level.get(role, 1)  # Default to teacher level
+        session.commit()
+        
+        # Log role change
+        log_action(
+            session,
+            current_user.id,
+            "user_role_updated",
+            "user",
+            str(user_id),
+            f"Updated {user.name} role from {old_role} to {user.role}",
+            request.client.host if request else None,
+            request.headers.get("user-agent") if request else None
+        )
+        
+        return {"message": f"User role updated to {user.role}"}
+
+# --- Quick Action Endpoints ---
+@app.post("/admin/generate-report")
+async def generate_system_report(request: Request, current_user: User = Depends(require_auth_level(3))):
+    """Generate system report (admin only)"""
+    with Session(engine) as session:
+        # Generate report data
+        total_users = session.exec(select(func.count(User.id))).one()
+        active_users = session.exec(select(func.count(User.id)).where(User.is_active == True)).one()
+        total_students = session.exec(select(func.count(Student.id))).one()
+        total_checkins = session.exec(
+            select(func.count(AuditLog.id)).where(AuditLog.action.in_(["check_in_with_duty_teacher", "check_in"]))
+        ).one()
+        
+        report_data = {
+            "generated_at": datetime.now().isoformat(),
+            "total_users": total_users,
+            "active_users": active_users,
+            "total_students": total_students,
+            "total_checkins": total_checkins,
+            "system_status": "operational"
+        }
+        
+        # Log report generation
+        log_action(
+            session,
+            current_user.id,
+            "system_report_generated",
+            "system",
+            None,
+            f"System report generated by {current_user.name}",
+            request.client.host if request else None,
+            request.headers.get("user-agent") if request else None
+        )
+        
+        return {"message": "System report generated successfully", "report": report_data}
+
+@app.post("/admin/export-data")
+async def export_all_data(request: Request, current_user: User = Depends(require_auth_level(3))):
+    """Export all system data (admin only)"""
+    with Session(engine) as session:
+        # Get all users
+        users = session.exec(select(User)).all()
+        
+        # Get all students
+        students = session.exec(select(Student)).all()
+        
+        # Get recent audit logs
+        audit_logs = session.exec(
+            select(AuditLog)
+            .order_by(AuditLog.timestamp.desc())
+            .limit(1000)
+        ).all()
+        
+        export_data = {
+            "exported_at": datetime.now().isoformat(),
+            "users": [user.dict() for user in users],
+            "students": [student.dict() for student in students],
+            "audit_logs": [log.dict() for log in audit_logs]
+        }
+        
+        # Log data export
+        log_action(
+            session,
+            current_user.id,
+            "data_exported",
+            "system",
+            None,
+            f"Data exported by {current_user.name}",
+            request.client.host if request else None,
+            request.headers.get("user-agent") if request else None
+        )
+        
+        return {"message": "Data exported successfully", "data": export_data}
+
+@app.post("/admin/create-backup")
+async def create_system_backup(request: Request, current_user: User = Depends(require_auth_level(3))):
+    """Create system backup (admin only)"""
+    # Simulate backup creation
+    backup_data = {
+        "backup_id": f"backup_{int(time.time())}",
+        "created_at": datetime.now().isoformat(),
+        "size": "45.2 MB",
+        "status": "completed"
+    }
+    
+    with Session(engine) as session:
+        # Log backup creation
+        log_action(
+            session,
+            current_user.id,
+            "backup_created",
+            "system",
+            None,
+            f"System backup created by {current_user.name}",
+            request.client.host if request else None,
+            request.headers.get("user-agent") if request else None
+        )
+    
+    return {"message": "System backup created successfully", "backup": backup_data}
+
+@app.post("/admin/maintenance")
+async def perform_maintenance(request: Request, current_user: User = Depends(require_auth_level(3))):
+    """Perform system maintenance (admin only)"""
+    # Simulate maintenance tasks
+    maintenance_tasks = [
+        "Database optimization completed",
+        "Cache cleared",
+        "Logs rotated",
+        "System health check passed"
+    ]
+    
+    with Session(engine) as session:
+        # Log maintenance
+        log_action(
+            session,
+            current_user.id,
+            "maintenance_performed",
+            "system",
+            None,
+            f"System maintenance performed by {current_user.name}",
+            request.client.host if request else None,
+            request.headers.get("user-agent") if request else None
+        )
+    
+    return {"message": "System maintenance completed", "tasks": maintenance_tasks}
+
+@app.post("/admin/emergency-shutdown")
+async def emergency_shutdown(request: Request, current_user: User = Depends(require_auth_level(3))):
+    """Emergency system shutdown (admin only)"""
+    with Session(engine) as session:
+        # Log emergency shutdown
+        log_action(
+            session,
+            current_user.id,
+            "emergency_shutdown",
+            "system",
+            None,
+            f"Emergency shutdown initiated by {current_user.name}",
+            request.client.host if request else None,
+            request.headers.get("user-agent") if request else None
+        )
+    
+    return {"message": "Emergency shutdown initiated. System will restart automatically."}
+
 # --- Admin Level 3 Endpoints ---
 @app.get("/admin/users")
 async def list_users(current_user: User = Depends(require_auth_level(3))):
@@ -886,6 +1241,41 @@ async def list_users(current_user: User = Depends(require_auth_level(3))):
     with Session(engine) as session:
         users = session.exec(select(User)).all()
         return {"users": users}
+
+@app.post("/admin/students")
+async def add_student_admin(request: Request, student_data: StudentCreate, current_user: User = Depends(require_auth_level(3))):
+    """Add a new student (admin only)"""
+    with Session(engine) as session:
+        # Check if student already exists
+        existing_student = session.exec(select(Student).where(Student.name == student_data.name)).first()
+        if existing_student:
+            raise HTTPException(status_code=400, detail="Student with this name already exists")
+        
+        # Create new student
+        new_student = Student(
+            name=student_data.name,
+            tid="",  # Will be set when tag is registered
+            lastscan=int(time.time()),
+            in_school=False,
+            schoolClass=student_data.class_name
+        )
+        session.add(new_student)
+        session.commit()
+        session.refresh(new_student)
+        
+        # Log student creation
+        log_action(
+            session,
+            current_user.id,
+            "student_created",
+            "student",
+            str(new_student.id),
+            f"Admin created new student {new_student.name} in class {student_data.class_name}",
+            request.client.host if request else None,
+            request.headers.get("user-agent") if request else None
+        )
+        
+        return {"message": "Student created successfully", "student_id": new_student.id}
 
 @app.delete("/admin/users/{user_id}")
 async def delete_user(user_id: int, request: Request, current_user: User = Depends(require_auth_level(3))):

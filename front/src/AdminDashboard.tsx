@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { AddStudentModal } from "./components/AddStudentModal";
 
 interface SystemMetrics {
   total_users: number;
@@ -48,9 +49,15 @@ export function AdminDashboard() {
   const [users, setUsers] = useState<User[]>([]);
   const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [showConfigModal, setShowConfigModal] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
-  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [newlyCreatedStudentId, setNewlyCreatedStudentId] = useState<
+    number | null
+  >(null);
+  const [isAddingStudent, setIsAddingStudent] = useState(false);
 
   // Check authentication
   useEffect(() => {
@@ -209,6 +216,173 @@ export function AdminDashboard() {
     }
   };
 
+  // Quick action handlers
+  const handleGenerateReport = async () => {
+    try {
+      setIsLoading(true);
+      const token = localStorage.getItem("token");
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+
+      const response = await fetch(
+        "http://localhost:8000/admin/generate-report",
+        {
+          method: "POST",
+          headers,
+        }
+      );
+
+      if (response.ok) {
+        const result = await response.json();
+        setSuccessMessage(
+          `Report generated successfully! Generated at: ${result.report.generated_at}`
+        );
+        setTimeout(() => setSuccessMessage(""), 5000); // Clear after 5 seconds
+      } else {
+        setError("Failed to generate report");
+      }
+    } catch {
+      setError("Failed to generate report");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleExportData = async () => {
+    try {
+      setIsLoading(true);
+      const token = localStorage.getItem("token");
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+
+      const response = await fetch("http://localhost:8000/admin/export-data", {
+        method: "POST",
+        headers,
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        setSuccessMessage(
+          `Data exported successfully! Exported at: ${result.data.exported_at}`
+        );
+        setTimeout(() => setSuccessMessage(""), 5000); // Clear after 5 seconds
+      } else {
+        setError("Failed to export data");
+      }
+    } catch {
+      setError("Failed to export data");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCreateBackup = async () => {
+    try {
+      setIsLoading(true);
+      const token = localStorage.getItem("token");
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+
+      const response = await fetch(
+        "http://localhost:8000/admin/create-backup",
+        {
+          method: "POST",
+          headers,
+        }
+      );
+
+      if (response.ok) {
+        const result = await response.json();
+        setSuccessMessage(
+          `Backup created successfully! Backup ID: ${result.backup.backup_id}`
+        );
+        setTimeout(() => setSuccessMessage(""), 5000); // Clear after 5 seconds
+      } else {
+        setError("Failed to create backup");
+      }
+    } catch {
+      setError("Failed to create backup");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleMaintenance = async () => {
+    try {
+      setIsLoading(true);
+      const token = localStorage.getItem("token");
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+
+      const response = await fetch("http://localhost:8000/admin/maintenance", {
+        method: "POST",
+        headers,
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        setSuccessMessage(
+          `Maintenance completed successfully! ${result.tasks.length} tasks completed.`
+        );
+        setTimeout(() => setSuccessMessage(""), 5000); // Clear after 5 seconds
+      } else {
+        setError("Failed to perform maintenance");
+      }
+    } catch {
+      setError("Failed to perform maintenance");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleEmergencyShutdown = async () => {
+    if (
+      !confirm(
+        "Are you sure you want to initiate emergency shutdown? This action cannot be undone."
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      const token = localStorage.getItem("token");
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+
+      const response = await fetch(
+        "http://localhost:8000/admin/emergency-shutdown",
+        {
+          method: "POST",
+          headers,
+        }
+      );
+
+      if (response.ok) {
+        const result = await response.json();
+        setSuccessMessage(`Emergency shutdown initiated! ${result.message}`);
+        setTimeout(() => setSuccessMessage(""), 5000); // Clear after 5 seconds
+        // In a real application, you might want to redirect or perform other actions
+      } else {
+        setError("Failed to initiate emergency shutdown");
+      }
+    } catch {
+      setError("Failed to initiate emergency shutdown");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const formatTime = (timestamp: string) => {
     return new Date(timestamp).toLocaleString();
   };
@@ -263,6 +437,11 @@ export function AdminDashboard() {
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 text-red-600 px-4 py-3 rounded">
             {error}
+          </div>
+        )}
+        {successMessage && (
+          <div className="mb-6 bg-green-50 border border-green-200 text-green-600 px-4 py-3 rounded">
+            {successMessage}
           </div>
         )}
 
@@ -491,20 +670,40 @@ export function AdminDashboard() {
                 Quick Actions
               </h2>
               <div className="space-y-3">
-                <button className="w-full px-4 py-2 text-sm text-white bg-blue-600 rounded hover:bg-blue-700">
-                  Generate System Report
+                <button
+                  onClick={handleGenerateReport}
+                  disabled={isLoading}
+                  className="w-full px-4 py-2 text-sm text-white bg-blue-600 rounded hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isLoading ? "Generating..." : "Generate System Report"}
                 </button>
-                <button className="w-full px-4 py-2 text-sm text-white bg-green-600 rounded hover:bg-green-700">
-                  Export All Data
+                <button
+                  onClick={handleExportData}
+                  disabled={isLoading}
+                  className="w-full px-4 py-2 text-sm text-white bg-green-600 rounded hover:bg-green-700 disabled:opacity-50"
+                >
+                  {isLoading ? "Exporting..." : "Export All Data"}
                 </button>
-                <button className="w-full px-4 py-2 text-sm text-white bg-purple-600 rounded hover:bg-purple-700">
-                  Create Backup
+                <button
+                  onClick={handleCreateBackup}
+                  disabled={isLoading}
+                  className="w-full px-4 py-2 text-sm text-white bg-purple-600 rounded hover:bg-purple-700 disabled:opacity-50"
+                >
+                  {isLoading ? "Creating..." : "Create Backup"}
                 </button>
-                <button className="w-full px-4 py-2 text-sm text-white bg-orange-600 rounded hover:bg-orange-700">
-                  System Maintenance
+                <button
+                  onClick={handleMaintenance}
+                  disabled={isLoading}
+                  className="w-full px-4 py-2 text-sm text-white bg-orange-600 rounded hover:bg-orange-700 disabled:opacity-50"
+                >
+                  {isLoading ? "Maintaining..." : "System Maintenance"}
                 </button>
-                <button className="w-full px-4 py-2 text-sm text-white bg-red-600 rounded hover:bg-red-700">
-                  Emergency Shutdown
+                <button
+                  onClick={handleEmergencyShutdown}
+                  disabled={isLoading}
+                  className="w-full px-4 py-2 text-sm text-white bg-red-600 rounded hover:bg-red-700 disabled:opacity-50"
+                >
+                  {isLoading ? "Shutting down..." : "Emergency Shutdown"}
                 </button>
               </div>
             </div>
@@ -516,8 +715,11 @@ export function AdminDashboard() {
               <h2 className="text-xl font-semibold text-gray-900">
                 User Management
               </h2>
-              <button className="px-4 py-2 text-sm text-white bg-green-600 rounded hover:bg-green-700">
-                Add New User
+              <button
+                onClick={() => setShowAddStudentModal(true)}
+                className="px-4 py-2 text-sm text-white bg-green-600 rounded hover:bg-green-700"
+              >
+                Add New Student
               </button>
             </div>
             <div className="overflow-x-auto">
@@ -743,6 +945,74 @@ export function AdminDashboard() {
           </div>
         </div>
       )}
+
+      {/* Add Student Modal */}
+      <AddStudentModal
+        isOpen={showAddStudentModal}
+        onClose={() => {
+          setShowAddStudentModal(false);
+          setNewlyCreatedStudentId(null);
+        }}
+        onAddStudent={async (student) => {
+          setIsAddingStudent(true);
+          try {
+            const token = localStorage.getItem("token");
+            const headers = {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            };
+
+            const response = await fetch(
+              "http://localhost:8000/admin/students",
+              {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                  name: student.name,
+                  class_name: student.class,
+                }),
+              }
+            );
+
+            if (response.ok) {
+              const result = await response.json();
+              setNewlyCreatedStudentId(result.student_id);
+              await fetchDashboardData(); // Refresh data
+            } else {
+              setError("Failed to add student");
+            }
+          } catch {
+            setError("Failed to add student");
+          } finally {
+            setIsAddingStudent(false);
+          }
+        }}
+        onRegisterNfcTag={async (studentId) => {
+          const token = localStorage.getItem("token");
+          const headers = {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          };
+
+          const response = await fetch(
+            "http://localhost:8000/it/register-tag",
+            {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                student_id: studentId,
+                student_name: "New Student", // This will be updated by backend
+              }),
+            }
+          );
+
+          if (!response.ok) {
+            throw new Error("Failed to register NFC tag");
+          }
+        }}
+        isLoading={isAddingStudent}
+        studentId={newlyCreatedStudentId}
+      />
     </div>
   );
 }
