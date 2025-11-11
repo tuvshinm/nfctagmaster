@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 
 interface Student {
   name: string;
@@ -9,7 +9,7 @@ interface AddStudentModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAddStudent: (student: Student) => void;
-  onRegisterNfcTag?: (studentId: number) => Promise<void>;
+  onRegisterNfcTag?: (studentId: number, studentName: string) => Promise<void>;
   isLoading?: boolean;
   studentId?: number | null;
 }
@@ -28,7 +28,7 @@ export function AddStudentModal({
   const [isRegisteringNfc, setIsRegisteringNfc] = useState(false);
   const [showNfcRegistration, setShowNfcRegistration] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !classValue.trim()) {
       setError("Please fill in all fields");
@@ -39,8 +39,6 @@ export function AddStudentModal({
       return;
     }
     onAddStudent({ name: name.trim(), class: classValue.trim() });
-    setName("");
-    setClassValue("");
     setError("");
     setShowNfcRegistration(true); // Show NFC registration option after successful student creation
   };
@@ -50,7 +48,7 @@ export function AddStudentModal({
 
     setIsRegisteringNfc(true);
     try {
-      await onRegisterNfcTag(studentId);
+      await onRegisterNfcTag(studentId, name);
       setShowNfcRegistration(false);
       onClose();
     } catch (error) {

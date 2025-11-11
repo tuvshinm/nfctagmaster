@@ -88,7 +88,7 @@ class newUser(BaseModel):
     in_school: bool
 
 # --- Database Setup ---
-engine = create_engine("postgresql://username:password@localhost:5432/nfctag")
+engine = create_engine("sqlite:///./nfctag.db")
 SQLModel.metadata.create_all(engine)
 
 # --- Authentication Configuration ---
@@ -279,9 +279,7 @@ def format_tag_id(tag):
 def handle_tag(tag, request: Optional[Request] = None):
     # Called when a tag is connected. Checks TextRecord content and processes check-in/out
     global LASTID, device, LASTUUID
-    tid = format_tag_id(tag)
-    print(f"Tag detected: id={tid}")
-    
+    tid = format_tag_id(tag)    
     try:
         if getattr(tag, "ndef", None):
             if tag.ndef:
@@ -289,9 +287,7 @@ def handle_tag(tag, request: Optional[Request] = None):
                 for record in tag.ndef.records:
                     if isinstance(record, TextRecord):
                         found_textrecord = True
-                        text_content = record.text
-                        print(f"Tag content: {text_content}")
-                        
+                        text_content = record.text                        
                         # Process check-in/out logic
                         process_nfc_scan(text_content, request)
                         
@@ -319,8 +315,9 @@ def process_nfc_scan(tag_content: str, request: Optional[Request] = None):
         with Session(engine) as session:
             # Find the user by tag content
             user = session.exec(select(Student).where(Student.tid == tag_content)).first()
+            
+            # Check if user was found
             if not user:
-                print(f"No user found for tag: {tag_content}")
                 return
             
             # Get current duty teacher
@@ -368,6 +365,21 @@ def process_nfc_scan(tag_content: str, request: Optional[Request] = None):
             
     except Exception as e:
         print(f"Error processing NFC scan: {repr(e)}")
+        # Log the error for debugging
+        try:
+            with Session(engine) as session:
+                log_action(
+                    session,
+                    0,  # System user ID for errors
+                    "nfc_scan_error",
+                    "system",
+                    tag_content,
+                    f"NFC scan processing failed: {repr(e)}",
+                    request.client.host if request else None,
+                    request.headers.get("user-agent") if request else None
+                )
+        except Exception as log_error:
+            print(f"Failed to log error: {repr(log_error)}")
 
 
 def scan_loop(clf: nfc.ContactlessFrontend, stop_event: threading.Event, poll_period: float = 2.0):
@@ -404,8 +416,6 @@ def scan_loop(clf: nfc.ContactlessFrontend, stop_event: threading.Event, poll_pe
         finally:
             _clf_lock.release()
 
-        if not tag_found:
-            print("none detected")
 
         time.sleep(0.1)
 
@@ -780,17 +790,21 @@ async def register_student_tag(request: Request, student_data: dict, current_use
             return (time.time() - start) > 20.0  # 20 second timeout to allow user to tap
         acquired = _clf_lock.acquire(timeout=0.5)
         if not acquired:
+            print("not found")
             return {"written": False, "reason": "reader busy"}
         try:
             try:
                 _clf.connect(rdwr={"on-connect": on_connect}, terminate=terminate)
             except Exception as e:
+                print(f"erroer!!!{e}")
                 return {"written": False, "reason": f"connect error: {repr(e)}"}
         finally:
             _clf_lock.release()
         if written:
+            print("written!!")
             return {"written": True, "reason": message, "tag_uuid": tag_uuid}
         else:
+            print("timeout!!!")
             return {"written": False, "reason": message or "no tag presented within timeout"}
     # Informational: client should show "Please press NFC tag on reader" while awaiting.
     result = await run_in_threadpool(register_tag)

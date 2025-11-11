@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { AddStudentModal } from "./components/AddStudentModal";
+import { NfcRegistrationModal } from "./components/NfcRegistrationModal";
 
 interface SystemStatus {
   nfc_reader_status: string;
@@ -35,6 +36,8 @@ export function ITStaffDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [showNfcRegistrationModal, setShowNfcRegistrationModal] =
+    useState(false);
   const [newlyCreatedStudentId, setNewlyCreatedStudentId] = useState<
     number | null
   >(null);
@@ -282,12 +285,20 @@ export function ITStaffDashboard() {
                 <button className="w-full px-4 py-2 text-sm text-white bg-purple-600 rounded hover:bg-purple-700">
                   Export User Data
                 </button>
-                <button
-                  onClick={() => setShowAddStudentModal(true)}
-                  className="w-full px-4 py-2 text-sm text-white bg-green-600 rounded hover:bg-green-700"
-                >
-                  Add New Student
-                </button>
+                <div className="space-y-2">
+                  <button
+                    onClick={() => setShowAddStudentModal(true)}
+                    className="w-full px-4 py-2 text-sm text-white bg-green-600 rounded hover:bg-green-700"
+                  >
+                    Add New Student
+                  </button>
+                  <button
+                    onClick={() => setShowNfcRegistrationModal(true)}
+                    className="w-full px-4 py-2 text-sm text-white bg-purple-600 rounded hover:bg-purple-700"
+                  >
+                    Register NFC
+                  </button>
+                </div>
                 <button className="w-full px-4 py-2 text-sm text-white bg-orange-600 rounded hover:bg-orange-700">
                   System Maintenance
                 </button>
@@ -467,6 +478,37 @@ export function ITStaffDashboard() {
             setIsAddingStudent(false);
           }
         }}
+        onRegisterNfcTag={async (studentId, studentName) => {
+          const token = localStorage.getItem("token");
+          const headers = {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          };
+
+          const response = await fetch(
+            "http://localhost:8000/it/register-tag",
+            {
+              method: "POST",
+              headers,
+              body: JSON.stringify({
+                student_id: studentId,
+                student_name: studentName,
+              }),
+            }
+          );
+
+          if (!response.ok) {
+            throw new Error("Failed to register NFC tag");
+          }
+        }}
+        isLoading={isAddingStudent}
+        studentId={newlyCreatedStudentId}
+      />
+
+      {/* NFC Registration Modal */}
+      <NfcRegistrationModal
+        isOpen={showNfcRegistrationModal}
+        onClose={() => setShowNfcRegistrationModal(false)}
         onRegisterNfcTag={async (studentId) => {
           const token = localStorage.getItem("token");
           const headers = {
@@ -491,7 +533,7 @@ export function ITStaffDashboard() {
           }
         }}
         isLoading={isAddingStudent}
-        studentId={newlyCreatedStudentId}
+        students={users.filter((user) => user.role === "student")}
       />
     </div>
   );

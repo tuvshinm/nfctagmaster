@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { AddStudentModal } from "./components/AddStudentModal";
+import { NfcRegistrationModal } from "./components/NfcRegistrationModal";
 
 interface Student {
   id: number;
@@ -35,6 +36,8 @@ export function TeacherDashboard() {
   const [showAssignDuty, setShowAssignDuty] = useState(false);
   const [selectedTeacherId, setSelectedTeacherId] = useState<number>(1);
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
+  const [showNfcRegistrationModal, setShowNfcRegistrationModal] =
+    useState(false);
   const [newlyCreatedStudentId, setNewlyCreatedStudentId] = useState<
     number | null
   >(null);
@@ -162,7 +165,10 @@ export function TeacherDashboard() {
   };
 
   // Handle NFC tag registration
-  const handleRegisterNfcTag = async (studentId: number) => {
+  const handleRegisterNfcTag = async (
+    studentId: number,
+    studentName: string
+  ) => {
     const token = localStorage.getItem("token");
     const headers = {
       Authorization: `Bearer ${token}`,
@@ -174,7 +180,7 @@ export function TeacherDashboard() {
       headers,
       body: JSON.stringify({
         student_id: studentId,
-        student_name: "New Student", // This will be updated by backend
+        student_name: studentName,
       }),
     });
 
@@ -289,12 +295,20 @@ export function TeacherDashboard() {
               <h2 className="text-xl font-semibold text-gray-900">
                 Student Check-in Status
               </h2>
-              <button
-                onClick={() => setShowAddStudentModal(true)}
-                className="px-4 py-2 text-sm text-white bg-green-600 rounded hover:bg-green-700"
-              >
-                Add New Student
-              </button>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => setShowAddStudentModal(true)}
+                  className="px-4 py-2 text-sm text-white bg-green-600 rounded hover:bg-green-700"
+                >
+                  Add New Student
+                </button>
+                <button
+                  onClick={() => setShowNfcRegistrationModal(true)}
+                  className="px-4 py-2 text-sm text-white bg-purple-600 rounded hover:bg-purple-700"
+                >
+                  Register NFC
+                </button>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-gray-200">
@@ -437,6 +451,15 @@ export function TeacherDashboard() {
         onRegisterNfcTag={handleRegisterNfcTag}
         isLoading={isAddingStudent}
         studentId={newlyCreatedStudentId}
+      />
+
+      {/* NFC Registration Modal */}
+      <NfcRegistrationModal
+        isOpen={showNfcRegistrationModal}
+        onClose={() => setShowNfcRegistrationModal(false)}
+        onRegisterNfcTag={handleRegisterNfcTag}
+        isLoading={isAddingStudent}
+        students={students}
       />
     </div>
   );
