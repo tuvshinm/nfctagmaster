@@ -281,29 +281,27 @@ def handle_tag(tag, request: Optional[Request] = None):
     global LASTID, device, LASTUUID
     tid = format_tag_id(tag)    
     try:
-        if getattr(tag, "ndef", None):
-            if tag.ndef:
-                found_textrecord = False
-                for record in tag.ndef.records:
-                    if isinstance(record, TextRecord):
-                        found_textrecord = True
-                        text_content = record.text                        
-                        # Process check-in/out logic
-                        process_nfc_scan(text_content, request)
-                        
-                if not found_textrecord:
-                    print("No TextRecord found on tag")
-            else:
-                print("Tag has no NDEF records")
-        else:
-            print("Tag is not NDEF-compatible")
-            
         if LASTID != tid:
             # if device: #This shit doesn't work at the moment because of AssertionError and shit.
             #     try:
             #         device.turn_on_led_and_buzzer()
             #     except Exception as e:
             #         print("LED/buzzer activation failed:", repr(e))
+            if getattr(tag, "ndef", None):
+                if tag.ndef:
+                    found_textrecord = False
+                    for record in tag.ndef.records:
+                        if isinstance(record, TextRecord):
+                            found_textrecord = True
+                            text_content = record.text                        
+                            # Process check-in/out logic
+                            process_nfc_scan(text_content, request)
+                    if not found_textrecord:
+                        print("No TextRecord found on tag")
+                else:
+                    print("Tag has no NDEF records")
+            else:
+                print("Tag is not NDEF-compatible")
             LASTID = tid
             print("New tag detected")
     except Exception as e:
@@ -834,8 +832,7 @@ async def register_student_tag(request: Request, student_data: dict, current_use
     else:
         raise HTTPException(status_code=504, detail=result.get("reason", "registration failed"))
 
-# --- IT Staff Level 2 Endpoints ---
-@app.get("/it/students")
+@app.get("/students")
 async def get_all_students(current_user: User = Depends(require_auth_level(1))):
     """Get all students (teachers and IT staff view)"""
     with Session(engine) as session:

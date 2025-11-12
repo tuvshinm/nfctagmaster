@@ -300,7 +300,7 @@ class TestStudentManagement(unittest.TestCase):
         
         # Test endpoint
         headers = {"Authorization": f"Bearer {token}"}
-        response = self.client.get("/it/students", headers=headers)
+        response = self.client.get("/students", headers=headers)
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("students", data)
@@ -437,7 +437,7 @@ class TestErrorHandling(unittest.TestCase):
     def test_protected_endpoints_without_auth(self):
         """Test that protected endpoints fail without authentication"""
         protected_endpoints = [
-            ("/it/students", "GET"),
+            ("/students", "GET"),
             ("/teacher/register-tag", "POST"),
             ("/teacher/current-duty", "GET"),
             ("/system/scan-test", "GET")
@@ -843,7 +843,7 @@ class TestITStaffEndpoints(unittest.TestCase):
         headers = {"Authorization": f"Bearer {token}"}
         
         # Test endpoint
-        response = self.client.get("/it/students", headers=headers)
+        response = self.client.get("/students", headers=headers)
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("students", data)
@@ -851,7 +851,7 @@ class TestITStaffEndpoints(unittest.TestCase):
         
     def test_it_students_endpoint_without_auth(self):
         """Test that IT students endpoint fails without authentication"""
-        response = self.client.get("/it/students")
+        response = self.client.get("/students")
         self.assertEqual(response.status_code, 403)
         
     def test_it_students_endpoint_with_teacher_auth(self):
@@ -872,7 +872,7 @@ class TestITStaffEndpoints(unittest.TestCase):
         token = login_response.json()["access_token"]
         
         headers = {"Authorization": f"Bearer {token}"}
-        response = self.client.get("/it/students", headers=headers)
+        response = self.client.get("/students", headers=headers)
         self.assertEqual(response.status_code, 200)
         
     def test_it_audit_logs_endpoint(self):
@@ -953,7 +953,7 @@ class TestTeacherEndpoints(unittest.TestCase):
         headers = {"Authorization": f"Bearer {token}"}
         
         # Test endpoint
-        response = self.client.get("/it/students", headers=headers)
+        response = self.client.get("/students", headers=headers)
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertIn("students", data)

@@ -2,6 +2,8 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { AddStudentModal } from "./components/AddStudentModal";
 import { NfcRegistrationModal } from "./components/NfcRegistrationModal";
+import { ToastContainer, toast } from "./components/Toast";
+import { useRealTimeUpdates } from "./hooks/useRealTimeUpdates";
 
 interface Student {
   id: number;
@@ -29,10 +31,6 @@ interface CheckInLog {
 export function TeacherDashboard() {
   const navigate = useNavigate();
   const [currentDuty, setCurrentDuty] = useState<DutyTeacher | null>(null);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [checkInLogs, setCheckInLogs] = useState<CheckInLog[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
   const [showAssignDuty, setShowAssignDuty] = useState(false);
   const [selectedTeacherId, setSelectedTeacherId] = useState<number>(1);
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
@@ -42,6 +40,16 @@ export function TeacherDashboard() {
     number | null
   >(null);
   const [isAddingStudent, setIsAddingStudent] = useState(false);
+  const [error, setError] = useState("");
+
+  // Use real-time updates hook
+  const {
+    students,
+    checkInLogs,
+    isLoading: isRealTimeLoading,
+    lastUpdate,
+    refresh,
+  } = useRealTimeUpdates();
 
   // Check authentication
   useEffect(() => {
@@ -53,10 +61,11 @@ export function TeacherDashboard() {
       return;
     }
 
-    fetchDashboardData();
+    fetchCurrentDuty();
   }, [navigate]);
 
-  const fetchDashboardData = async () => {
+  // Fetch current duty only (students and logs come from real-time hook)
+  const fetchCurrentDuty = async () => {
     try {
       const token = localStorage.getItem("token");
       const headers = {
@@ -73,30 +82,8 @@ export function TeacherDashboard() {
         const dutyData = await dutyResponse.json();
         setCurrentDuty(dutyData);
       }
-
-      // Fetch students
-      const studentsResponse = await fetch(
-        "http://localhost:8000/teacher/students",
-        { headers }
-      );
-      if (studentsResponse.ok) {
-        const studentsData = await studentsResponse.json();
-        setStudents(studentsData.students);
-      }
-
-      // Fetch check-in logs
-      const logsResponse = await fetch(
-        "http://localhost:8000/teacher/check-in-logs",
-        { headers }
-      );
-      if (logsResponse.ok) {
-        const logsData = await logsResponse.json();
-        setCheckInLogs(logsData.logs);
-      }
     } catch {
-      setError("Failed to load dashboard data");
-    } finally {
-      setIsLoading(false);
+      setError("Failed to load current duty");
     }
   };
 
@@ -117,13 +104,16 @@ export function TeacherDashboard() {
       );
 
       if (response.ok) {
-        await fetchDashboardData(); // Refresh data
+        await fetchCurrentDuty(); // Refresh data
         setShowAssignDuty(false);
+        toast.success("Duty assigned successfully!");
       } else {
         setError("Failed to assign duty");
+        toast.error("Failed to assign duty");
       }
     } catch {
       setError("Failed to assign duty");
+      toast.error("Failed to assign duty");
     }
   };
 
@@ -153,12 +143,15 @@ export function TeacherDashboard() {
       if (response.ok) {
         const result = await response.json();
         setNewlyCreatedStudentId(result.student_id);
-        await fetchDashboardData(); // Refresh data
+        await fetchCurrentDuty(); // Refresh data
+        toast.success(`Student ${student.name} added successfully!`);
       } else {
         setError("Failed to add student");
+        toast.error("Failed to add student");
       }
     } catch {
       setError("Failed to add student");
+      toast.error("Failed to add student");
     } finally {
       setIsAddingStudent(false);
     }
@@ -187,9 +180,11 @@ export function TeacherDashboard() {
     if (!response.ok) {
       throw new Error("Failed to register NFC tag");
     }
+
+    toast.success(`NFC tag registered for ${studentName}!`);
   };
 
-  if (isLoading) {
+  if (isRealTimeLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-xl">Loading dashboard...</div>
@@ -199,6 +194,7 @@ export function TeacherDashboard() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <ToastContainer />
       {/* Header */}
       <header className="bg-white shadow">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -269,9 +265,19 @@ export function TeacherDashboard() {
 
             {/* Quick Stats */}
             <div className="bg-white shadow rounded-lg p-6">
-              <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                Quick Stats
-              </h2>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold text-gray-900">
+                  Quick Stats
+                </h2>
+                <button
+                  onClick={refresh}
+                  disabled={isRealTimeLoading}
+                  className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center space-x-1"
+                >
+                  <span>↻</span>
+                  <span>Refresh</span>
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="text-center">
                   <div className="text-2xl font-bold text-blue-600">
@@ -286,6 +292,13 @@ export function TeacherDashboard() {
                   <div className="text-sm text-gray-600">Present</div>
                 </div>
               </div>
+              {lastUpdate && (
+                <div className="mt-4 text-center">
+                  <div className="text-xs text-gray-500">
+                    Last updated: {lastUpdate.toLocaleTimeString()}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
