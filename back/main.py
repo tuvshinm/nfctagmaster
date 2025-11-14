@@ -12,7 +12,8 @@ from ndef import TextRecord
 from sqlmodel import SQLModel, Session, Field, create_engine, select
 from sqlalchemy import func
 from pydantic import BaseModel
-from fastapi import FastAPI, HTTPException, Depends, status, Request
+from fastapi import FastAPI, HTTPException, Depends, status, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,55 @@ from enum import Enum
 import secrets
 import hashlib
 import jwt
+import json
+import asyncio
+
+# WebSocket manager for handling connections
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: list[WebSocket] = []
+        self.pending_messages = []
+        self._lock = threading.Lock()
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+
+    async def send_personal_message(self, message: str, websocket: WebSocket):
+        await websocket.send_text(message)
+
+    async def broadcast(self, message: str):
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except:
+                # Remove disconnected clients
+                self.active_connections.remove(connection)
+
+    def queue_message(self, message: dict):
+        """Thread-safe method to queue WebSocket messages"""
+        with self._lock:
+            self.pending_messages.append(message)
+
+    async def process_pending_messages(self):
+        """Process pending WebSocket messages"""
+        with self._lock:
+            if not self.pending_messages:
+                return
+            
+            messages_to_send = self.pending_messages.copy()
+            self.pending_messages.clear()
+        
+        for message in messages_to_send:
+            try:
+                await self.broadcast(json.dumps(message))
+            except Exception as e:
+                print(f"Error broadcasting message: {e}")
+
+manager = ConnectionManager()
 
 # --- Authentication Models ---
 class UserRole(str, Enum):
@@ -185,6 +235,7 @@ def require_role(required_role: UserRole):
             )
         return current_user
     return dependency
+
 
 # --- NFC and Database Globals ---
 _clf: Optional[nfc.ContactlessFrontend] = None
@@ -361,6 +412,22 @@ def process_nfc_scan(tag_content: str, request: Optional[Request] = None):
             
             print(f"Processed {scan_type} for {user.name} (was {old_status}, now {new_status}) - Duty teacher: {duty_teacher_name}")
             
+            # Queue WebSocket notification for thread-safe handling
+            notification_message = {
+                "type": "nfc_scan",
+                "action": scan_type,
+                "student_name": user.name,
+                "student_id": user.id,
+                "old_status": old_status,
+                "new_status": new_status,
+                "timestamp": datetime.now().isoformat(),
+                "duty_teacher": duty_teacher_name
+            }
+            
+            # Queue the message to be processed by the main event loop
+            manager.queue_message(notification_message)
+            print(f"Queued WebSocket notification for {user.name} {scan_type}")
+            
     except Exception as e:
         print(f"Error processing NFC scan: {repr(e)}")
         # Log the error for debugging
@@ -467,6 +534,18 @@ async def lifespan(app: FastAPI):
     _scan_thread = threading.Thread(target=starter, daemon=True, name="nfc-scan-thread")
     _scan_thread.start()
 
+    # Start WebSocket message processor task
+    async def process_messages_task():
+        while True:
+            try:
+                await manager.process_pending_messages()
+                await asyncio.sleep(0.1)  # Process messages every 100ms
+            except Exception as e:
+                print(f"Error processing WebSocket messages: {e}")
+                await asyncio.sleep(1)
+
+    message_processor = asyncio.create_task(process_messages_task())
+
     try:
         yield
     finally:
@@ -474,6 +553,14 @@ async def lifespan(app: FastAPI):
         _stop_event.set()
         if _scan_thread and _scan_thread.is_alive():
             _scan_thread.join(timeout=5.0)
+        
+        # Cancel message processor
+        message_processor.cancel()
+        try:
+            await message_processor
+        except asyncio.CancelledError:
+            pass
+        
         # try:
         #     if _clf:
         #         _clf.close()
@@ -1519,3 +1606,14 @@ async def write_item(newTag: newUser, current_user: User = Depends(require_auth_
             }
     else:
         raise HTTPException(status_code=504, detail=result.get("reason", "registration failed"))
+
+# WebSocket endpoint for real-time notifications
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep the connection alive and listen for messages
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { AddStudentModal } from "./components/AddStudentModal";
 import { NfcRegistrationModal } from "./components/NfcRegistrationModal";
 import { ToastContainer, toast } from "./components/Toast";
-import { useRealTimeUpdates } from "./hooks/useRealTimeUpdates";
+import { useWebSocket } from "./hooks/useWebSocket";
 
 interface Student {
   id: number;
@@ -31,6 +31,8 @@ interface CheckInLog {
 export function TeacherDashboard() {
   const navigate = useNavigate();
   const [currentDuty, setCurrentDuty] = useState<DutyTeacher | null>(null);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [checkInLogs, setCheckInLogs] = useState<CheckInLog[]>([]);
   const [showAssignDuty, setShowAssignDuty] = useState(false);
   const [selectedTeacherId, setSelectedTeacherId] = useState<number>(1);
   const [showAddStudentModal, setShowAddStudentModal] = useState(false);
@@ -40,16 +42,11 @@ export function TeacherDashboard() {
     number | null
   >(null);
   const [isAddingStudent, setIsAddingStudent] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
-  // Use real-time updates hook
-  const {
-    students,
-    checkInLogs,
-    isLoading: isRealTimeLoading,
-    lastUpdate,
-    refresh,
-  } = useRealTimeUpdates();
+  // Use WebSocket for real-time updates
+  const { isConnected, lastMessage } = useWebSocket();
 
   // Check authentication
   useEffect(() => {
@@ -61,11 +58,11 @@ export function TeacherDashboard() {
       return;
     }
 
-    fetchCurrentDuty();
+    fetchDashboardData();
   }, [navigate]);
 
-  // Fetch current duty only (students and logs come from real-time hook)
-  const fetchCurrentDuty = async () => {
+  // Fetch dashboard data
+  const fetchDashboardData = async () => {
     try {
       const token = localStorage.getItem("token");
       const headers = {
@@ -82,10 +79,64 @@ export function TeacherDashboard() {
         const dutyData = await dutyResponse.json();
         setCurrentDuty(dutyData);
       }
+
+      // Fetch students
+      const studentsResponse = await fetch("http://localhost:8000/students", {
+        headers,
+      });
+      if (studentsResponse.ok) {
+        const studentsData = await studentsResponse.json();
+        setStudents(studentsData.students);
+      }
+
+      // Fetch check-in logs
+      const logsResponse = await fetch(
+        "http://localhost:8000/teacher/check-in-logs",
+        { headers }
+      );
+      if (logsResponse.ok) {
+        const logsData = await logsResponse.json();
+        setCheckInLogs(logsData.logs);
+      }
     } catch {
-      setError("Failed to load current duty");
+      setError("Failed to load dashboard data");
+    } finally {
+      setIsLoading(false);
     }
   };
+
+  // Handle WebSocket messages for real-time updates
+  useEffect(() => {
+    if (lastMessage && lastMessage.type === "nfc_scan") {
+      const { action, student_name, student_id, old_status, new_status } =
+        lastMessage;
+
+      // Show toast notification
+      if (action === "check_in") {
+        toast.success(`${student_name} checked in!`);
+      } else if (action === "check_out") {
+        toast.info(`${student_name} checked out!`);
+      }
+
+      // Update local students data if we have the student
+      setStudents((prevStudents) =>
+        prevStudents.map((student) =>
+          student.id === student_id
+            ? {
+                ...student,
+                in_school: Boolean(new_status),
+                last_scan: Math.floor(Date.now() / 1000),
+              }
+            : student
+        )
+      );
+    }
+  }, [lastMessage]);
+
+  // Initial data fetch
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
 
   const assignDuty = async () => {
     try {
@@ -104,7 +155,7 @@ export function TeacherDashboard() {
       );
 
       if (response.ok) {
-        await fetchCurrentDuty(); // Refresh data
+        await fetchDashboardData(); // Refresh data
         setShowAssignDuty(false);
         toast.success("Duty assigned successfully!");
       } else {
@@ -143,7 +194,7 @@ export function TeacherDashboard() {
       if (response.ok) {
         const result = await response.json();
         setNewlyCreatedStudentId(result.student_id);
-        await fetchCurrentDuty(); // Refresh data
+        await fetchDashboardData(); // Refresh data
         toast.success(`Student ${student.name} added successfully!`);
       } else {
         setError("Failed to add student");
@@ -184,7 +235,7 @@ export function TeacherDashboard() {
     toast.success(`NFC tag registered for ${studentName}!`);
   };
 
-  if (isRealTimeLoading) {
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-xl">Loading dashboard...</div>
@@ -270,8 +321,8 @@ export function TeacherDashboard() {
                   Quick Stats
                 </h2>
                 <button
-                  onClick={refresh}
-                  disabled={isRealTimeLoading}
+                  onClick={fetchDashboardData}
+                  disabled={isLoading}
                   className="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center space-x-1"
                 >
                   <span>↻</span>
@@ -287,15 +338,15 @@ export function TeacherDashboard() {
                 </div>
                 <div className="text-center">
                   <div className="text-2xl font-bold text-green-600">
-                    {students.filter((s) => s.in_school).length}
+                    {students.filter((s: Student) => s.in_school).length}
                   </div>
                   <div className="text-sm text-gray-600">Present</div>
                 </div>
               </div>
-              {lastUpdate && (
+              {isConnected && (
                 <div className="mt-4 text-center">
-                  <div className="text-xs text-gray-500">
-                    Last updated: {lastUpdate.toLocaleTimeString()}
+                  <div className="text-xs text-green-600">
+                    Live updates connected
                   </div>
                 </div>
               )}
@@ -342,7 +393,7 @@ export function TeacherDashboard() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {students.map((student) => (
+                  {students.map((student: Student) => (
                     <tr key={student.id}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                         {student.name}
@@ -393,7 +444,7 @@ export function TeacherDashboard() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {checkInLogs.slice(0, 10).map((log) => (
+                  {checkInLogs.slice(0, 10).map((log: CheckInLog) => (
                     <tr key={log.id}>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {formatTime(log.timestamp)}
